@@ -41,6 +41,15 @@ func resetTrackBuffer() {
 	trackBuffer = trackBuffer[:0]
 }
 
+func GetArtistsName(artists []spotify.SimpleArtist) string {
+	return strings.Join(underscore.MapBy(artists, "Name").([]string), ", ")
+}
+
+func UriToID(uri spotify.URI) spotify.ID {
+	uriParts := strings.Split(string(uri), ":")
+	return spotify.ID(underscore.Last(uriParts).(string))
+}
+
 func messageCreate(session *discordgo.Session, message *discordgo.MessageCreate) {
 	if strings.HasPrefix(message.Content, "!") {
 		command := strings.TrimLeft(message.Content, "!")
@@ -78,11 +87,8 @@ func messageCreate(session *discordgo.Session, message *discordgo.MessageCreate)
 				for i := 0; i < len(result.Tracks.Tracks); i++  {
 					track :=  result.Tracks.Tracks[i]
 
-					artistNames := underscore.MapBy(track.Artists, "Name").([]string)
-					artistNamesString := strings.Join(artistNames, ", ")
-
 					fields = append(fields, &discordgo.MessageEmbedField{
-						Name: strconv.Itoa(i) + ". " + artistNamesString,
+						Name: strconv.Itoa(i) + ". " + GetArtistsName(track.Artists),
 						Value: track.Name,
 						Inline: true,
 					})
@@ -109,6 +115,11 @@ func messageCreate(session *discordgo.Session, message *discordgo.MessageCreate)
 				playOptions := spotify.PlayOptions {}
 				var contextUri spotify.URI = spotify.URI(spotifyUri)
 
+				nowPlayingEmbed := discordgo.MessageEmbed{
+					Title: "Now playing:",
+					Color: 0x1ED760,
+				}
+
 				if len(trackBuffer) > 0 && len(spotifyUri) == 1 && isNumeric(spotifyUri) {
 					i, err := strconv.Atoi(spotifyUri)
 
@@ -118,9 +129,45 @@ func messageCreate(session *discordgo.Session, message *discordgo.MessageCreate)
 					}
 
 					track := trackBuffer[i]
+
+					nowPlayingEmbed.Description = GetArtistsName(track.Artists) + " - " + track.Name
 					playOptions.URIs = []spotify.URI{track.URI}
 				} else {
 					playOptions.PlaybackContext = &contextUri
+
+					if strings.Contains(string(contextUri), "album") {
+						album, err := Clients[0].GetAlbum(UriToID(contextUri))
+
+						if err == nil {
+							nowPlayingEmbed.Description = GetArtistsName(album.Artists) + " - " + album.Name
+						}
+					}
+
+					if strings.Contains(string(contextUri), "playlist") {
+						result, err := Clients[0].Search(string(contextUri), spotify.SearchTypePlaylist)
+
+						if err != nil {
+							fmt.Print(err)
+						}
+
+						if err == nil && result.Playlists.Total > 0 {
+							playlist := result.Playlists.Playlists[0]
+
+							nowPlayingEmbed.Description = playlist.Owner.DisplayName + " - " + playlist.Name
+						}
+					}
+
+					if strings.Contains(string(contextUri), "artist") {
+						artist, err := Clients[0].GetArtist(UriToID(contextUri))
+
+						if err != nil {
+							fmt.Print(err)
+						}
+
+						if err == nil {
+							nowPlayingEmbed.Description = artist.Name
+						}
+					}
 				}
 
 				for i := 0; i < len(Clients); i++  {
@@ -130,6 +177,10 @@ func messageCreate(session *discordgo.Session, message *discordgo.MessageCreate)
 						fmt.Println(err)
 					}
 				}
+
+				session.UpdateStatus(0, nowPlayingEmbed.Description)
+				session.ChannelMessageSendEmbed(message.ChannelID, &nowPlayingEmbed)
+
 		}
 	}
 }
